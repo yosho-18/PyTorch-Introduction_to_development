@@ -21,3 +21,4 @@ def list2tensor(token_idxes, max_len=100, padding=True):
     if padding:
         token_idxes = token_idxes + [0] * (max_len - len(token_idxes))
     return torch.tensor(token_idxes, dtype=torch.int64), n_tokens
+
