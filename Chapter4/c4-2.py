@@ -1,44 +1,78 @@
-# 転移学習：事前に作ったモデルを再利用する
-from torchvision.datasets import ImageFolder
-from torchvision import transforms, models
+from torchvision.datasets import FashionMNIST
+from torchvision import transforms
 import torch
 from torch import nn, optim
 from torch.utils.data import (Dataset, DataLoader, TensorDataset)
 import tqdm
 
-# CNN: VGG, Inception, ResNet
-# CIFAR-10, ImageNet
+# 訓練用データを取得
+# そのままだとPLI(Python Imaging Library)の画像形成でDatasetを作ってしまうので，
+# transforms.ToTensorでTensorに変換する  # FashionMNIST
+fashion_mnist_train = FashionMNIST(".",
+                                   train=True, download=True, transform=transforms.ToTensor())
+# 検証データの取得
+fashion_mnist_test = FashionMNIST(".",
+                                   train=False, download=True, transform=transforms.ToTensor())
 
-# ImageFolder関数を使用してDatasetを作成する
-train_imgs = ImageFolder("./taco_and_burrito/train/",
-    transform=transforms.Compose([transforms.RandomCrop(224), transforms.ToTensor()])
+# バッチサイズが128のDataLoaderをそれぞれ作成
+batch_size = 128
+train_loader = DataLoader(fashion_mnist_train,
+                          batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(fashion_mnist_test,
+                          batch_size=batch_size, shuffle=False)
+
+
+
+# (N, C, H, W)形式のTensorを(N, C * H * W)に引き伸ばす層
+# 畳み込み層の出力をMLPに渡す際に必要
+class FlattenLayer(nn.Module):
+    def forward(self, x):
+        sizes = x.size()
+        return x.view(sizes[0], -1)
+
+# 5×5のカーネルを使用し最初に32個，次に64個のチャンネルを作成する
+# BatchNorm2dは画像認識用のBatch Normalization
+# Dropout2dは画像認識用のDropout
+# 最後にFlattenLayerを挟む
+conv_net = nn.Sequential(
+    nn.Conv2d(1, 32, 5),  # 画像の畳み込みを行う
+    nn.MaxPool2d(2),  # プーリング（畳み込みの後に位置の感度を鈍くする）を行う
+    nn.ReLU(),
+    nn.BatchNorm2d(32),
+    nn.Dropout2d(0.25),
+
+    nn.Conv2d(32, 64, 5),
+    nn.MaxPool2d(2),
+    nn.ReLU(),
+    nn.BatchNorm2d(64),
+    nn.Dropout2d(0.25),
+
+    FlattenLayer()
 )
 
-test_imgs = ImageFolder("./taco_and_burrito/test/",
-    transform=transforms.Compose([transforms.RandomCrop(224), transforms.ToTensor()])
+
+# 畳み込みによって最終的にどのようなサイズになっているか（nn.Linearの入力の次元で必要）を，
+# 実際にダミーデータを入れてみて確認する
+test_input = torch.ones(1, 1, 28, 28)  # 28×28
+conv_output_size = conv_net(test_input).size()[-1]
+
+# 2層のMLP
+mlp = nn.Sequential(
+    nn.Linear(conv_output_size, 200),
+    nn.ReLU(),
+    nn.BatchNorm1d(200),
+    nn.Dropout2d(0.25),
+    nn.Linear(200, 10),
 )
 
-# DataLoaderを作成
-train_loader = DataLoader(train_imgs, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_imgs, batch_size=32, shuffle=False)
 
-print(train_imgs.classes)
-print(train_imgs.class_to_idx)
+# 最終的なCNN
+net = nn.Sequential(
+    conv_net,
+    mlp
+)
 
-
-# 事前学習済みのresnet18をロード
-net = models.resnet18(pretrained=True)
-
-# すべてのパラメータを微分対象外になる
-for p in net.parameters():
-    p.requires_grad=False
-
-# 最後の線形層を付け加える
-fc_input_dim = net.fc.in_features
-net.fc = nn.Linear(fc_input_dim, 2)
-
-
-# c4-1のeval_netと全く同じ
+# 評価のヘルパー関数
 def eval_net(net, data_loader, device="cpu"):
     # DropoutやBatchNormを無効化
     net.eval()
@@ -61,17 +95,13 @@ def eval_net(net, data_loader, device="cpu"):
     acc = (ys == ypreds).float().sum() / len(ys)
     return acc.item()
 
-# c4-1のtrain_netとほぼ同じ，最後のところだけ学習させる
-def train_net(net, train_loader, test_loader, only_fc=True, optimizer_cls=optim.Adam,
+# 訓練のヘルパー関数
+def train_net(net, train_loader, test_loader, optimizer_cls=optim.Adam,
               loss_fn=nn.CrossEntropyLoss(), n_iter=10, device="cpu"):
     train_losses = []
     train_acc = []
     val_acc = []
-    if only_fc:
-        # 最後の線形パラメータのみを，optimizerに渡す
-        optimizer = optimizer_cls(net.fc.parameters())
-    else:
-        optimizer = optimizer_cls(net.parameters())
+    optimizer = optimizer_cls(net.parameters())
     for epoch in range(n_iter):
         running_loss = 0.0
         # ネットワークを訓練モードにする
@@ -105,60 +135,3 @@ def train_net(net, train_loader, test_loader, only_fc=True, optimizer_cls=optim.
 
 # 訓練を実行
 train_net(net, train_loader, test_loader, n_iter=20)  # device="cuda:0"
-
-
-# 入力をそのまま出力するダミー層を作り，fcを置き換える
-class IdentityLayer(nn.Module):
-    def forward(self, x):
-        return x
-
-net = models.resnet18(pretrained=True)
-for p in net.parameters():
-    p.requires_grad=False
-net.fc = IdentityLayer()
-
-
-
-# 著者作成CNNモデル
-
-# (N, C, H, W)形式のTensorを(N, C * H * W)に引き伸ばす層
-# 畳み込み層の出力をMLPに渡す際に必要
-class FlattenLayer(nn.Module):
-    def forward(self, x):
-        sizes = x.size()
-        return x.view(sizes[0], -1)
-
-
-conv_net = nn.Sequential(
-    nn.Conv2d(3, 32, 5),  # 画像の畳み込みを行う
-    nn.MaxPool2d(2),  # プーリング（畳み込みの後に位置の感度を鈍くする）を行う
-    nn.ReLU(),
-    nn.BatchNorm2d(32),
-
-    nn.Conv2d(32, 64, 5),
-    nn.MaxPool2d(2),
-    nn.ReLU(),
-    nn.BatchNorm2d(64),
-
-    nn.Conv2d(64, 128, 5),
-    nn.MaxPool2d(2),
-    nn.ReLU(),
-    nn.BatchNorm2d(128),
-
-    FlattenLayer()
-)
-
-
-# 畳み込みによって最終的にどのようなサイズになっているかを，実際にデータを入れて確認する
-test_input = torch.ones(1, 3, 224, 224)  # 28×28
-conv_output_size = conv_net(test_input).size()[-1]
-
-# 最終的なCNN
-net = nn.Sequential(
-    conv_net,
-    nn.Linear(conv_output_size, 2)
-)
-
-
-# 訓練を実行
-train_net(net, train_loader, test_loader, n_iter=10, only_fc=False)  # device="cuda:0"
