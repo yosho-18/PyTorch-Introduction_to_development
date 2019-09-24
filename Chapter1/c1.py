@@ -95,7 +95,7 @@ print(x2.t())
 # RuntimeError: Expected object of scalar type Long but got scalar type Float for sequence element 1 in sequence argument at position #1 'tensors'
 print(torch.cat([x1, x2], dim=1))
 # HWCをCHWに変換
-# 64×32×3のデータが100個
+# 64×32×3のデータが100個，HWC,CHW
 hwc_img_data = torch.rand(3, 4, 2, 3); print(hwc_img_data)
 chw_img_data = hwc_img_data.transpose(1, 2).transpose(1, 3); print(chw_img_data)
 
