@@ -86,4 +86,3 @@ class SequenceGenerationNet(nn.Module):
         for i in range(length):
             inp = torch.tensor([[top_i]], dtype=torch.int64)
             inp = inp.to(device)
-            
